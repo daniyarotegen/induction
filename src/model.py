@@ -11,7 +11,35 @@ import torch.nn as nn
 import torch.nn.functional as F
 from einops import einsum
 
-VALID_ARCHS = ("1L-attn", "2L-attn", "2L-full")
+VALID_ARCHS = ("1L-attn", "2L-attn", "2L-attn-ln", "2L-full")
+
+
+def apply_layernorm(
+    ln: nn.LayerNorm,
+    x: torch.Tensor,
+    frozen_std: Optional[torch.Tensor] = None,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Apply LayerNorm, optionally freezing the per-token denominator std from a clean pass.
+
+    Args:
+        ln: PyTorch LayerNorm module.
+        x: Input tensor of shape (B, T, D).
+        frozen_std: Optional cached denominator tensor of shape (B, T, 1).
+
+    Returns:
+        y: Normalized output of shape (B, T, D).
+        std: Denominator sqrt(var + eps) actually used, shape (B, T, 1).
+    """
+    mean = x.mean(dim=-1, keepdim=True)                               # (B, T, 1)
+    if frozen_std is None:
+        var = x.var(dim=-1, unbiased=False, keepdim=True)             # (B, T, 1)
+        std = torch.sqrt(var + ln.eps)                                # (B, T, 1)
+    else:
+        std = frozen_std                                              # (B, T, 1)
+    y = (x - mean) / std                                              # (B, T, D)
+    if ln.elementwise_affine:
+        y = y * ln.weight + ln.bias                                   # (B, T, D)
+    return y, std
 
 
 @dataclass(frozen=True)
@@ -45,7 +73,7 @@ class TransformerConfig:
 
     @property
     def use_ln(self) -> bool:
-        return self.arch == "2L-full"
+        return self.arch in ("2L-attn-ln", "2L-full")
 
     def to_dict(self) -> Dict[str, object]:
         return asdict(self)
@@ -165,13 +193,43 @@ class TransformerBlock(nn.Module):
         self,
         x: torch.Tensor,  # (B, T, D)
         ablate_head_indices: Optional[Set[int]] = None,
+        layer_idx: int = 0,
+        frozen_ln_stds: Optional[Dict[str, torch.Tensor]] = None,
+        ln_stds_out: Optional[Dict[str, torch.Tensor]] = None,
+        attn_inputs_out: Optional[List[torch.Tensor]] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        attn_in = self.ln1(x) if self.ln1 is not None else x          # (B, T, D)
+        if self.ln1 is not None:
+            key1 = f"block{layer_idx}_ln1"
+            if frozen_ln_stds is not None or ln_stds_out is not None:
+                attn_in, std1 = apply_layernorm(
+                    self.ln1, x, frozen_std=frozen_ln_stds.get(key1) if frozen_ln_stds else None
+                )
+                if ln_stds_out is not None:
+                    ln_stds_out[key1] = std1
+            else:
+                attn_in = self.ln1(x)                                 # (B, T, D)
+        else:
+            attn_in = x                                               # (B, T, D)
+
+        if attn_inputs_out is not None:
+            attn_inputs_out.append(attn_in)
+
         attn_out, attn_pattern = self.attn(attn_in, ablate_head_indices=ablate_head_indices)
         x = x + attn_out                                              # (B, T, D)
 
         if self.mlp is not None:
-            mlp_in = self.ln2(x) if self.ln2 is not None else x       # (B, T, D)
+            if self.ln2 is not None:
+                key2 = f"block{layer_idx}_ln2"
+                if frozen_ln_stds is not None or ln_stds_out is not None:
+                    mlp_in, std2 = apply_layernorm(
+                        self.ln2, x, frozen_std=frozen_ln_stds.get(key2) if frozen_ln_stds else None
+                    )
+                    if ln_stds_out is not None:
+                        ln_stds_out[key2] = std2
+                else:
+                    mlp_in = self.ln2(x)                              # (B, T, D)
+            else:
+                mlp_in = x                                            # (B, T, D)
             x = x + self.mlp(mlp_in)                                  # (B, T, D)
 
         return x, attn_pattern
@@ -226,17 +284,26 @@ class InductionTransformer(nn.Module):
         tokens: torch.Tensor,  # (B, T)
         return_attn: bool = False,
         ablate_heads: Optional[Iterable[Tuple[int, int]]] = None,
-    ) -> Union[torch.Tensor, Tuple[torch.Tensor, List[torch.Tensor]]]:
-        """Forward pass with optional attention-pattern capture and head zero-ablation.
+        frozen_ln_stds: Optional[Dict[str, torch.Tensor]] = None,
+        return_cache: bool = False,
+    ) -> Union[
+        torch.Tensor,
+        Tuple[torch.Tensor, List[torch.Tensor]],
+        Tuple[torch.Tensor, Dict[str, object]],
+    ]:
+        """Forward pass with optional attention patterns, head zero-ablation, and frozen LN scales.
 
         Args:
             tokens: Long tensor of token IDs of shape (B, T), T <= max_len.
-            return_attn: If True, return (logits, attn_patterns).
+            return_attn: If True (and return_cache=False), return (logits, attn_patterns).
             ablate_heads: Optional iterable of (layer_idx, head_idx) pairs to zero-ablate.
+            frozen_ln_stds: Optional dict of cached LayerNorm denominator tensors (B, T, 1)
+                keyed by "block{l}_ln1", "block{l}_ln2", "ln_f" (for Frozen-LN-scale ablations).
+            return_cache: If True, return (logits, cache_dict) containing "attn_patterns",
+                "ln_stds", and "attn_inputs".
 
         Returns:
-            logits of shape (B, T, V), or (logits, attn_patterns) where attn_patterns is
-            a list of n_layers tensors each of shape (B, n_heads, T, T).
+            logits of shape (B, T, V), or (logits, attn_patterns), or (logits, cache_dict).
         """
         seq_len = tokens.shape[1]
         if seq_len > self.cfg.max_len:
@@ -258,16 +325,39 @@ class InductionTransformer(nn.Module):
         x = tok_emb + pos_emb                                         # (B, T, D)
 
         attn_patterns: List[torch.Tensor] = []
+        ln_stds_out: Optional[Dict[str, torch.Tensor]] = {} if return_cache else None
+        attn_inputs_out: Optional[List[torch.Tensor]] = [] if return_cache else None
+
         for layer_idx, block in enumerate(self.blocks):
-            x, attn = block(x, ablate_head_indices=ablate_by_layer.get(layer_idx))
-            if return_attn:
+            x, attn = block(
+                x,
+                ablate_head_indices=ablate_by_layer.get(layer_idx),
+                layer_idx=layer_idx,
+                frozen_ln_stds=frozen_ln_stds,
+                ln_stds_out=ln_stds_out,
+                attn_inputs_out=attn_inputs_out,
+            )
+            if return_attn or return_cache:
                 attn_patterns.append(attn)
 
         if self.ln_f is not None:
-            x = self.ln_f(x)                                          # (B, T, D)
+            if frozen_ln_stds is not None or ln_stds_out is not None:
+                x, std_f = apply_layernorm(
+                    self.ln_f, x, frozen_std=frozen_ln_stds.get("ln_f") if frozen_ln_stds else None
+                )
+                if ln_stds_out is not None:
+                    ln_stds_out["ln_f"] = std_f
+            else:
+                x = self.ln_f(x)                                      # (B, T, D)
 
         logits = einsum(x, self.W_U, "b t d, d v -> b t v")           # (B, T, V)
 
+        if return_cache:
+            return logits, {
+                "attn_patterns": attn_patterns,
+                "ln_stds": ln_stds_out,
+                "attn_inputs": attn_inputs_out,
+            }
         if return_attn:
             return logits, attn_patterns
         return logits

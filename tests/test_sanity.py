@@ -315,3 +315,46 @@ def test_6_single_batch_overfit() -> None:
 
     assert initial_loss is not None and final_loss is not None
     assert final_loss < 0.05, f"Failed single-batch overfit: initial={initial_loss:.3f}, final={final_loss:.3f}"
+
+
+@pytest.mark.parametrize("arch", ("2L-attn-ln", "2L-full"))
+def test_7_frozen_ln_scale_hook_and_2l_attn_ln_structure(arch: str) -> None:
+    """Verify 2L-attn-ln structure (LN without MLP) and exact Frozen-LN-scale ablation hook."""
+    set_seed(404)
+    cfg = TransformerConfig(arch=arch)
+    model = InductionTransformer(cfg)
+    model.eval()
+
+    if arch == "2L-attn-ln":
+        assert cfg.n_layers == 2 and cfg.use_ln and not cfg.use_mlp
+        assert model.ln_f is not None
+        for block in model.blocks:
+            assert block.ln1 is not None
+            assert block.ln2 is None and block.mlp is None
+
+    tokens = torch.randint(0, VOCAB_SIZE, (4, 32), dtype=torch.long)
+    with torch.no_grad():
+        clean_logits = model(tokens)
+        cached_logits, cache = model(tokens, return_cache=True)
+        ln_stds = cache["ln_stds"]
+
+        # 1) Cached forward matches native nn.LayerNorm forward to float32 precision
+        assert torch.allclose(clean_logits, cached_logits, atol=1e-5)
+        assert "ln_f" in ln_stds and "block0_ln1" in ln_stds and "block1_ln1" in ln_stds
+        if arch == "2L-full":
+            assert "block1_ln2" in ln_stds
+        else:
+            assert "block1_ln2" not in ln_stds
+
+        # 2) Passing clean frozen_ln_stds into an unablated pass reproduces clean logits
+        replayed_logits = model(tokens, frozen_ln_stds=ln_stds)
+        assert torch.allclose(clean_logits, replayed_logits, atol=1e-5)
+
+        # 3) Under L1 head ablation, frozen LN scales differ from standard recomputed LN scales
+        #    (amplifying weights slightly so residual variance shift under ablation is pronounced)
+        model.blocks[1].attn.W_O.data.mul_(10.0)
+        _, cache_amp = model(tokens, return_cache=True)
+        std_abl = model(tokens, ablate_heads=[(1, 0), (1, 1)])
+        frz_abl = model(tokens, ablate_heads=[(1, 0), (1, 1)], frozen_ln_stds=cache_amp["ln_stds"])
+        assert not torch.allclose(std_abl, frz_abl, atol=1e-5)
+
