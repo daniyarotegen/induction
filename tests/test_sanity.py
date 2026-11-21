@@ -6,28 +6,52 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-from induction.src.data import (
-    DATA_SEED,
-    N_PROBE,
-    N_VAL,
-    PROBE_HALF_LEN,
-    PROBE_SEED,
-    SEQ_LEN,
-    VAL_SEED,
-    VOCAB_SIZE,
-    OnlineDirichletMarkovSampler,
-    make_base_transition_matrix,
-    make_prefix_matching_probe,
-    make_validation_set,
-    set_seed,
-)
-from induction.src.metrics import (
-    compute_k_composition_matrix,
-    compute_prefix_matching_score,
-    compute_prev_token_score,
-)
-from induction.src.model import VALID_ARCHS, InductionTransformer, TransformerConfig
-from induction.src.train import build_optimizer
+try:
+    from src.data import (
+        DATA_SEED,
+        N_PROBE,
+        N_VAL,
+        PROBE_HALF_LEN,
+        PROBE_SEED,
+        SEQ_LEN,
+        VAL_SEED,
+        VOCAB_SIZE,
+        OnlineDirichletMarkovSampler,
+        make_base_transition_matrix,
+        make_prefix_matching_probe,
+        make_validation_set,
+        set_seed,
+    )
+    from src.metrics import (
+        compute_k_composition_matrix,
+        compute_prefix_matching_score,
+        compute_prev_token_score,
+    )
+    from src.model import VALID_ARCHS, InductionTransformer, TransformerConfig
+    from src.train import build_optimizer
+except ModuleNotFoundError:
+    from induction.src.data import (
+        DATA_SEED,
+        N_PROBE,
+        N_VAL,
+        PROBE_HALF_LEN,
+        PROBE_SEED,
+        SEQ_LEN,
+        VAL_SEED,
+        VOCAB_SIZE,
+        OnlineDirichletMarkovSampler,
+        make_base_transition_matrix,
+        make_prefix_matching_probe,
+        make_validation_set,
+        set_seed,
+    )
+    from induction.src.metrics import (
+        compute_k_composition_matrix,
+        compute_prefix_matching_score,
+        compute_prev_token_score,
+    )
+    from induction.src.model import VALID_ARCHS, InductionTransformer, TransformerConfig
+    from induction.src.train import build_optimizer
 
 
 @pytest.mark.parametrize("arch", VALID_ARCHS)
@@ -218,7 +242,7 @@ def test_4_k_composition_matrix_identity() -> None:
             assert torch.allclose(functional_score, matrix_score, atol=1e-5)
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required for CUDA determinism check")
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA unavailable")
 def test_5_cuda_determinism() -> None:
     """5. Identical seeds produce identical batches, weights, and logits on CUDA."""
     p_base = make_base_transition_matrix(vocab_size=VOCAB_SIZE, data_seed=DATA_SEED)

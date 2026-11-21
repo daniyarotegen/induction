@@ -16,31 +16,52 @@ import numpy as np
 from scipy.stats import friedmanchisquare, spearmanr
 import torch
 
-# Allow direct invocation via `python induction/src/analysis.py`
+# Support `python -m induction.src.analysis`, `python -m src.analysis`, and direct script execution
 if __package__ is None or __package__ == "":
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-
-from induction.src.data import (
-    DATA_SEED,
-    N_PROBE,
-    N_VAL,
-    PROBE_HALF_LEN,
-    PROBE_SEED,
-    SEQ_LEN,
-    VAL_SEED,
-    VOCAB_SIZE,
-    ValidationSet,
-    make_base_transition_matrix,
-    make_prefix_matching_probe,
-    make_validation_set,
-)
-from induction.src.metrics import (
-    compute_prefix_matching_score,
-    compute_prev_token_score,
-    evaluate_validation_loss,
-)
-from induction.src.model import InductionTransformer, TransformerConfig
-from induction.src.overnight_sweep import SweepJob, build_sweep_matrix
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from src.data import (
+        DATA_SEED,
+        N_PROBE,
+        N_VAL,
+        PROBE_HALF_LEN,
+        PROBE_SEED,
+        SEQ_LEN,
+        VAL_SEED,
+        VOCAB_SIZE,
+        ValidationSet,
+        make_base_transition_matrix,
+        make_prefix_matching_probe,
+        make_validation_set,
+    )
+    from src.metrics import (
+        compute_prefix_matching_score,
+        compute_prev_token_score,
+        evaluate_validation_loss,
+    )
+    from src.model import InductionTransformer, TransformerConfig
+    from src.overnight_sweep import SweepJob, build_sweep_matrix
+else:
+    from .data import (
+        DATA_SEED,
+        N_PROBE,
+        N_VAL,
+        PROBE_HALF_LEN,
+        PROBE_SEED,
+        SEQ_LEN,
+        VAL_SEED,
+        VOCAB_SIZE,
+        ValidationSet,
+        make_base_transition_matrix,
+        make_prefix_matching_probe,
+        make_validation_set,
+    )
+    from .metrics import (
+        compute_prefix_matching_score,
+        compute_prev_token_score,
+        evaluate_validation_loss,
+    )
+    from .model import InductionTransformer, TransformerConfig
+    from .overnight_sweep import SweepJob, build_sweep_matrix
 
 # Publication-clean matplotlib defaults
 plt.rcParams.update(
@@ -1174,16 +1195,17 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run Stage 2 trajectory analysis, cumulative ablations, and figure generation."
     )
+    in_pkg_root = (Path.cwd() / "pyproject.toml").is_file()
     parser.add_argument(
         "--sweep-root",
         type=str,
-        default="induction/runs/overnight_sweep",
+        default="runs/overnight_sweep" if in_pkg_root else "induction/runs/overnight_sweep",
         help="Directory containing the 35 completed overnight sweep runs.",
     )
     parser.add_argument(
         "--figures-dir",
         type=str,
-        default="induction/artifacts/figures",
+        default="artifacts/figures" if in_pkg_root else "induction/artifacts/figures",
         help="Output directory for the 5 publication-clean PNG figures.",
     )
     parser.add_argument("--device", type=str, default=None)

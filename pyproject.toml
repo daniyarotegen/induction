@@ -1,0 +1,18 @@
+[project]
+name = "induction-heads-repro"
+version = "0.1.0"
+description = "From-scratch PyTorch + einops reproduction of Induction Heads & Emergent ICL (Olsson et al., 2022)"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "einops>=0.8.2",
+    "matplotlib>=3.11.2",
+    "numpy>=2.5.5",
+    "pytest>=9.2.0",
+    "scipy>=1.18.1",
+    "torch>=2.15.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

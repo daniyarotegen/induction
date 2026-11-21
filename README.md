@@ -90,26 +90,37 @@ Zero-training checkpoint ablations across all `30` 2L `final.pt` checkpoints ([`
 
 ---
 
-## 4. Reproducibility
+## 4. Environment & Reproducibility
 
-Run all commands from the repository root with the project virtual environment active:
+### Installation
+
+- **Portable install (macOS / Linux / CPU / GPU):** install direct dependencies with CUDA suffixes stripped from [`requirements.txt`](requirements.txt) (mirrored in [`pyproject.toml`](pyproject.toml)):
+  ```bash
+  pip install -r requirements.txt
+  ```
+- **Exact hardware lockfile (`eurus`, RTX 5070, Python 3.12.16, PyTorch 2.15.0+cu132, CUDA 13.2):** see [`env/eurus-cu132.lock.txt`](env/eurus-cu132.lock.txt) for the full frozen package set.
+- **Precomputed 35-run summary table:** [`artifacts/data/sweep_summary.csv`](artifacts/data/sweep_summary.csv) contains all 35 final run metrics, analytical baselines, ablations, and timings for immediate inspection without retraining.
+
+### Running Tests, Training & Analysis
+
+Commands work identically from a standalone `induction/` checkout (shown below) or from the parent monorepo root using the `induction.src.*` module prefix:
 
 ```bash
 # 1. Mandatory pre-run sanity suite (8 tests: shapes/causality, analytical baselines,
-#    synthetic attention metrics, K-composition identity, CUDA determinism, single-batch overfit)
-pytest induction/tests/test_sanity.py -v
+#    synthetic attention metrics, K-composition identity, CUDA determinism [skipped on CPU], overfit)
+pytest -v
 
 # 2. Single training run example (2L-attn, kappa=1.0, wd=0.01, seed=0, 10k steps)
-python -m induction.src.train \
+python -m src.train \
   --arch 2L-attn --kappa 1.0 --wd 0.01 --seed 0 --steps 10000 \
-  --out-dir induction/runs/single_2L_attn_seed0
+  --out-dir runs/single_2L_attn_seed0
 
 # 3. Full resumable 35-run overnight sweep (~50 min on RTX 5070; --dry-run lists all 35 jobs)
-python -m induction.src.overnight_sweep \
-  --out-root induction/runs/overnight_sweep --steps 10000
+python -m src.overnight_sweep \
+  --out-root runs/overnight_sweep --steps 10000
 
 # 4. Stage 2 trajectory analysis, 30-checkpoint cumulative ablations, and Figures 1–5 (~13 s on GPU)
-python -m induction.src.analysis \
-  --sweep-root induction/runs/overnight_sweep \
-  --figures-dir induction/artifacts/figures
+python -m src.analysis \
+  --sweep-root runs/overnight_sweep \
+  --figures-dir artifacts/figures
 ```

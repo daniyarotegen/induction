@@ -15,25 +15,40 @@ from typing import Dict, List, Optional, Tuple
 
 import torch
 
-# Allow direct invocation via `python induction/src/overnight_sweep.py`
+# Support `python -m induction.src.overnight_sweep`, `python -m src.overnight_sweep`, and direct script execution
 if __package__ is None or __package__ == "":
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-
-from induction.src.data import (
-    DATA_SEED,
-    N_PROBE,
-    N_VAL,
-    PROBE_HALF_LEN,
-    PROBE_SEED,
-    SEQ_LEN,
-    VAL_SEED,
-    VOCAB_SIZE,
-    ValidationSet,
-    make_base_transition_matrix,
-    make_prefix_matching_probe,
-    make_validation_set,
-)
-from induction.src.train import run_training
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from src.data import (
+        DATA_SEED,
+        N_PROBE,
+        N_VAL,
+        PROBE_HALF_LEN,
+        PROBE_SEED,
+        SEQ_LEN,
+        VAL_SEED,
+        VOCAB_SIZE,
+        ValidationSet,
+        make_base_transition_matrix,
+        make_prefix_matching_probe,
+        make_validation_set,
+    )
+    from src.train import run_training
+else:
+    from .data import (
+        DATA_SEED,
+        N_PROBE,
+        N_VAL,
+        PROBE_HALF_LEN,
+        PROBE_SEED,
+        SEQ_LEN,
+        VAL_SEED,
+        VOCAB_SIZE,
+        ValidationSet,
+        make_base_transition_matrix,
+        make_prefix_matching_probe,
+        make_validation_set,
+    )
+    from .train import run_training
 
 
 @dataclass(frozen=True)
@@ -182,10 +197,15 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run the resumable 35-run Induction Heads overnight sweep."
     )
+    default_root = (
+        "runs/overnight_sweep"
+        if (Path.cwd() / "pyproject.toml").is_file()
+        else "induction/runs/overnight_sweep"
+    )
     parser.add_argument(
         "--out-root",
         type=str,
-        default="induction/runs/overnight_sweep",
+        default=default_root,
         help="Root output directory for all 35 run folders.",
     )
     parser.add_argument("--steps", type=int, default=10_000)

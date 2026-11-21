@@ -7,14 +7,14 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 import torch
 import torch.nn.functional as F
 
-from induction.src.data import (
+from .data import (
     EARLY_POS_END,
     EARLY_POS_START,
     LATE_POS_END,
     LATE_POS_START,
     PROBE_HALF_LEN,
 )
-from induction.src.model import InductionTransformer
+from .model import InductionTransformer
 
 
 def compute_prev_token_score(attn: torch.Tensor) -> torch.Tensor:

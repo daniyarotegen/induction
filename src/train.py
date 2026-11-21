@@ -6,6 +6,7 @@ import argparse
 import json
 import math
 import os
+import platform
 import subprocess
 import sys
 import time
@@ -15,28 +16,46 @@ from typing import Any, Dict, Optional
 import torch
 import torch.nn.functional as F
 
-# Allow direct invocation via `python induction/src/train.py` as well as `-m induction.src.train`
+# Support `python -m induction.src.train`, `python -m src.train`, and direct script execution
 if __package__ is None or __package__ == "":
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-
-from induction.src.data import (
-    DATA_SEED,
-    N_PROBE,
-    N_VAL,
-    PROBE_HALF_LEN,
-    PROBE_SEED,
-    SEQ_LEN,
-    VAL_SEED,
-    VOCAB_SIZE,
-    OnlineDirichletMarkovSampler,
-    ValidationSet,
-    make_base_transition_matrix,
-    make_prefix_matching_probe,
-    make_validation_set,
-    set_seed,
-)
-from induction.src.metrics import evaluate_causal_head_ablation, evaluate_step_metrics
-from induction.src.model import VALID_ARCHS, InductionTransformer, TransformerConfig
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from src.data import (
+        DATA_SEED,
+        N_PROBE,
+        N_VAL,
+        PROBE_HALF_LEN,
+        PROBE_SEED,
+        SEQ_LEN,
+        VAL_SEED,
+        VOCAB_SIZE,
+        OnlineDirichletMarkovSampler,
+        ValidationSet,
+        make_base_transition_matrix,
+        make_prefix_matching_probe,
+        make_validation_set,
+        set_seed,
+    )
+    from src.metrics import evaluate_causal_head_ablation, evaluate_step_metrics
+    from src.model import VALID_ARCHS, InductionTransformer, TransformerConfig
+else:
+    from .data import (
+        DATA_SEED,
+        N_PROBE,
+        N_VAL,
+        PROBE_HALF_LEN,
+        PROBE_SEED,
+        SEQ_LEN,
+        VAL_SEED,
+        VOCAB_SIZE,
+        OnlineDirichletMarkovSampler,
+        ValidationSet,
+        make_base_transition_matrix,
+        make_prefix_matching_probe,
+        make_validation_set,
+        set_seed,
+    )
+    from .metrics import evaluate_causal_head_ablation, evaluate_step_metrics
+    from .model import VALID_ARCHS, InductionTransformer, TransformerConfig
 
 
 def get_git_info(repo_dir: Path) -> Dict[str, Any]:
@@ -293,9 +312,19 @@ def run_training(
     os.replace(ckpt_tmp, ckpt_path)
 
     # 5. Assemble and atomically write summary.json
-    repo_root = Path(__file__).resolve().parents[2]
+    git_info = get_git_info(Path(__file__).resolve().parent)
+    gpu_name = (
+        torch.cuda.get_device_name(device)
+        if device.type == "cuda" and torch.cuda.is_available()
+        else None
+    )
     summary: Dict[str, Any] = {
         "run_name": out_path.name,
+        "python_version": platform.python_version(),
+        "torch_version": torch.__version__,
+        "cuda_version": torch.version.cuda,
+        "gpu_name": gpu_name,
+        "git_commit": git_info["commit"],
         "config": {
             "arch": arch,
             "kappa": float(kappa),
@@ -316,7 +345,7 @@ def run_training(
             "n_params": model.count_parameters(),
             "model_config": cfg.to_dict(),
         },
-        "git": get_git_info(repo_root),
+        "git": git_info,
         "baselines": val_set.baselines,
         "final_metrics": last_eval_metrics,
         "ablation": ablation,

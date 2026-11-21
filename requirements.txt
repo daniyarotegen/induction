@@ -1,0 +1,8 @@
+# Direct imports used in induction/src/ and induction/tests/
+# Local CUDA build suffixes (e.g. +cu132) stripped for portable macOS/CPU/GPU installs.
+einops>=0.8.2
+matplotlib>=3.11.2
+numpy>=2.5.5
+pytest>=9.2.0
+scipy>=1.18.1
+torch>=2.15.0
