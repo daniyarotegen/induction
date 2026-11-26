@@ -46,7 +46,7 @@ python-dateutil==4.0.0
 scipy==1.18.1
 setuptools==84.2.1
 sympy==1.14.0
-torch==2.15.0+cu132
+torch==2.15.0
 triton==3.9.0
 typing-extensions==4.16.0
 tzdata==2026.6
