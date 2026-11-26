@@ -228,4 +228,4 @@ python -m src.review_diagnostics_v2
 
 ## 8. How This Was Built
 
-The code, the experiments and the first draft of this write-up were produced by an AI coding agent (Gemini, in Antigravity) running on my own machine under a separate account without admin rights; the commits are authored as `ML Repro Agent` for that reason. My part: choosing the paper to reproduce and which extensions to pursue, setting the scope of each stage, reviewing every result with a second model (Claude) acting as a reviewer, and deciding what to claim. Sections 2–4 were corrected and Section 7 added after that review.
+The code, the experiments and the first draft of this write-up were produced by an AI coding agent (Gemini, in Antigravity) running on my own machine under a separate account without admin rights; the commits are authored as `ML Repro Agent` for that reason. My part: choosing the paper to reproduce, setting the scope of each stage, reviewing every result with a second model (Claude) acting as a reviewer, and deciding what to claim. Sections 2–4 were corrected and Section 7 added after that review.
