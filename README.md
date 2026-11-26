@@ -1,14 +1,16 @@
 # Induction Heads & Emergent In-Context Learning — From-Scratch Reproduction, 35-Run Sweep & Mechanistic Dissection
 
-From-scratch PyTorch + `einops` reproduction of **Olsson et al. (2022)** on online Zipfian In-Context Markov Chains (ICMC) with exact analytical **Global Bigram** and **Bayes-Optimal Dirichlet-Multinomial** baselines. Covers a **35-run** core sweep (`seeds 0–4`, `10,000` steps / `~164M` tokens per run; `50.45 min` on a single RTX 5070), plus **Stage 3 mechanistic extensions** (`+10` controlled runs: `2L-attn-ln` factorization, `κ = 3.0` 25k-step convergence, Frozen-LN self-repair ablations, and active-dormant attention-sink / value-drain diagnostics).
+From-scratch PyTorch + `einops` reproduction of **Olsson et al. (2022)** on online Zipfian In-Context Markov Chains (ICMC) with exact analytical **Global Bigram** and **Bayes-Optimal Dirichlet-Multinomial** baselines. Covers a **35-run** core sweep (`seeds 0–4`, `10,000` steps / `~164M` tokens per run; `50.45 min` on a single RTX 5070), plus **Stage 3 mechanistic extensions** (`+10` controlled runs: `2L-attn-ln` factorization, `κ = 3.0` 25k-step extension, Frozen-LN self-repair ablations, and active-dormant attention-sink / value-drain diagnostics).
+
+> **Status: work in progress.** Sections 2–4 were corrected after a set of review diagnostics (logit-space ablations, absolute loss gaps, position-controlled sink analysis; [`src/review_diagnostics_v2.py`](src/review_diagnostics_v2.py), `artifacts/data/*_v2.csv`). One control is still to run: a 2-layer model with MLP but no LayerNorm (`2L-mlp`), which is needed before saying what the MLP does on its own. Limitations are in [Section 7](#7-limitations--open-questions).
 
 ## TL;DR
 
-- **Hard 1-Layer Depth Barrier & Sharp 2-Layer Phase Transition:** `1L-attn` stays permanently trapped at an in-context unigram ceiling (`val_loss_late = 3.362`, `icl_score = +0.255`, `prefix_match = 0.010`), whereas `2L-attn` undergoes a sharp phase transition at median step **`3,600`** (`86.5%` late-loss recovery toward exact Bayes-optimal) and `2L-full` transitions at median step **`1,000`**, reaching **`98.8%`** of exact Bayes-optimal late-context loss (`1.667` vs. `1.642`).
-- **Pre-LayerNorm vs. MLP Factorization (`+768` LN params vs. `+264k` MLP params):** Adding **only** Pre-LayerNorm (`2L-attn-ln`, no MLP) delivers **100%** of the phase-transition speedup (`t_icl50 = 700` vs. `3,600`), **100%** of Layer-0 single-head collapse (`Rank 1 = 0.961` vs. `Rank 2 = 0.031`), **61.7%** of the Bayes-gap closure (`0.280 → 0.107` nats), and **all** of the active-dormant position-0 attention sink (`c_u = 0`: `0.033 → 0.906`). The MLP specifically closes the final `0.082` nats to Bayes optimality (`1.749 → 1.667`) and drives nonlinear backup redundancy.
-- **Self-Repair Decomposition (Standard vs. Frozen-LN Ablation):** Naive single-head L1 ablation looks unselective because **all `4 / 4` L1 heads** become induction heads (`120 / 120` heads across 30 2L checkpoints). Progressive `0 → 4` L1 ablation exposes **`1.99×`** super-additive redundancy in `2L-full` vs. **`1.16×`** in `2L-attn` and **`1.22×`** in `2L-attn-ln`. Freezing post-L1 LayerNorm denominators reduces `2L-full`'s redundancy from **`1.99× → 1.73×`** (`25.9%` of excess super-additivity; `33.7%` on late loss), showing that **both** LN rescaling and nonlinear MLP compensation contribute — with MLP accounting for the majority (`~74%`).
-- **Prior Concentration (`κ`) & 25k-Step Convergence:** Strong in-context signal (`κ = 0.3`) transitions early (`t_icl50 = 2,900`, `95.9%` recovery), while prior-dominated chains (`κ = 3.0`) delay onset to `8,500` (`59.2%` at 10k, still climbing). Extending `κ = 3.0` to **`25,000` steps** saturates `prev_token_L0` to `0.959` and converges cleanly (`Δval_loss_late (24k→25k) = −0.0005`), asymptoting at **`77.8% ± 0.9%`** recovery — below `κ = 1.0` (`86.5%`) and `κ = 0.3` (`95.9%`).
-- **Structural Contrast with Finite-Data Grokking:** In online infinite-data ICL, weight decay is **not** required for generalization (`wd = 0.0` achieves the best ICL). Increasing `wd ∈ {0.0, 0.01, 0.1}` monotonically damps `icl_score` and `prev_token_L0` across **5/5 seeds** (Friedman $p = 0.0067$) and delays `t_icl50` by `+300` steps ($p = 0.0087$), while monotonically raising Frobenius K-composition (`0.192 → 0.197 → 0.232`, **5/5 seeds**, $p = 0.0067$).
+- **Hard 1-Layer Depth Barrier & Sharp 2-Layer Phase Transition:** `1L-attn` stays at an in-context unigram ceiling for all `10,000` steps (`val_loss_late = 3.362`, `icl_score = +0.255`, `prefix_match = 0.010`), whereas `2L-attn` undergoes a sharp phase transition at median step **`3,600`** (`86.5%` late-loss recovery toward exact Bayes-optimal) and `2L-full` transitions at median step **`1,000`**, reaching **`98.8%`** of exact Bayes-optimal late-context loss (`1.667` vs. `1.642`).
+- **Pre-LayerNorm vs. MLP Factorization (`+768` LN params vs. `+264k` MLP params):** Adding **only** Pre-LayerNorm (`2L-attn-ln`, no MLP) delivers **100%** of the phase-transition speedup (`t_icl50 = 700` vs. `3,600`), **100%** of Layer-0 single-head collapse (`Rank 1 = 0.961` vs. `Rank 2 = 0.031`), **61.7%** of the Bayes-gap closure (`0.280 → 0.107` nats), and **all** of the active-dormant position-0 attention sink (`c_u = 0`: `0.033 → 0.906`). The MLP closes the final `0.082` nats to Bayes optimality (`1.749 → 1.667`).
+- **Self-repair comes from LayerNorm:** Naive single-head L1 ablation looks unselective because **all `4 / 4` L1 heads** become induction heads (`120 / 120` heads across 30 2L checkpoints). Removing L1 heads one by one and measuring the correct-token **logit**, where head contributions add exactly unless something rescales them, removing all four costs **`1.47×`** the sum of the single-head drops in `2L-attn-ln` and **`1.25×`** in `2L-full`. Freezing the LayerNorm scale brings both to additivity or below (`1.00×` and **`0.97×`**), so LayerNorm rescaling accounts for essentially all of the redundancy. Measured in ICL score or loss instead, the ratios are distorted by the metric itself (`2L-attn`, exactly additive in logits, shows `1.16×`), which is why an earlier version of this README attributed ~74% of the redundancy to the MLP. Whether an MLP repairs anything without LayerNorm awaits the `2L-mlp` control.
+- **Prior Concentration (`κ`):** Strong in-context signal (`κ = 0.3`) transitions early (`t_icl50 = 2,900`), while prior-dominated chains (`κ = 3.0`) delay onset to `8,500`. At `10,000` steps the gap to Bayes-optimal late loss is **`0.13` / `0.28` / `0.42` nats** for `κ = 0.3 / 1 / 3`, and none of the three has converged. Extending `κ = 3.0` to **`25,000` steps** narrows its gap to `0.23` nats; an exponential fit over steps 15k–25k puts the asymptote at **`0.20` nats** (bootstrap 95% CI `[0.18, 0.23]`), with the loss still falling by `0.003` nats per 1k steps. On the recovery-% scale `κ = 3.0` looks worse (`77.8%` at 25k, `80%` fitted) only because that scale divides by a smaller bigram-to-Bayes range (`1.02` nats vs. `2.07` at `κ = 1`).
+- **Structural Contrast with Finite-Data Grokking:** In online infinite-data ICL, weight decay is **not** required for generalization (`wd = 0.0` achieves the best ICL). Increasing `wd ∈ {0.0, 0.01, 0.1}` monotonically damps `icl_score` and `prev_token_L0` across **5/5 seeds** (Friedman $p = 0.0067$) and delays `t_icl50` by `+300` steps ($p = 0.0087$), while monotonically raising Frobenius K-composition (`0.192 → 0.197 → 0.232`, **5/5 seeds**, $p = 0.0067$). The mechanism of that rise is open: the composed-matrix and OV norms of the top head pair both *grow* with weight decay while total weight norm falls.
 
 ![Depth barrier and phase transition](artifacts/figures/fig1_phase_transition_depth_barrier.png)
 
@@ -45,8 +47,8 @@ Analytical baselines at `κ = 1.0`: **Global Bigram** `late = 3.713` | **Bayes-O
 
 | `κ` | Bigram / Bayes `late` | Model `val_loss_late` | `icl_score` (Bayes) | Late Recovery | `prevL0` | `pmatch` | `t_icl50` med (range) | `Δlate (9k→10k)` | Converged at 10k? |
 | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **`0.3`** | `3.752` / `0.595` | `0.724 ± 0.027` | `1.747` (`1.802`) | **`95.9%`** | `0.930` | `0.371` | **`2,900`** (`2,900–3,200`) | `−0.0119` | Yes |
-| **`1.0`** | `3.713` / `1.642` | `1.922 ± 0.023` | `1.356` (`1.571`) | **`86.5%`** | `0.649` | `0.367` | **`3,600`** (`3,500–3,800`) | `−0.0129` | Yes |
+| **`0.3`** | `3.752` / `0.595` | `0.724 ± 0.027` | `1.747` (`1.802`) | **`95.9%`** | `0.930` | `0.371` | **`2,900`** (`2,900–3,200`) | `−0.0119` | No |
+| **`1.0`** | `3.713` / `1.642` | `1.922 ± 0.023` | `1.356` (`1.571`) | **`86.5%`** | `0.649` | `0.367` | **`3,600`** (`3,500–3,800`) | `−0.0129` | No |
 | **`3.0`** | `3.700` / `2.677` | `3.094 ± 0.035` | `0.526` (`0.879`) | **`59.2%`** | `0.445` | `0.288` | **`8,500`** (`7,900–8,900`) | **`−0.1334`** | **No (see §4.3)** |
 
 ![Prior concentration scaling](artifacts/figures/fig2_kappa_scaling.png)
@@ -114,7 +116,15 @@ Running [`src/dissect.py`](src/dissect.py) across all 15 checkpoints (`5` seeds 
 | **`2L-full`** | Standard | `1.554 → 1.341 → 0.892 → 0.123 → −0.056` | `0.811` | `1.610` | **`1.99×`** / `2.08×` |
 | **`2L-full`** | Frozen-LN | `1.554 → 1.314 → 0.956 → 0.465 → −0.008` | `0.902` | `1.562` | **`1.73×`** / `1.72×` |
 
-Freezing post-L1 LayerNorm denominators removes **`25.9%`** of `2L-full`'s excess ICL super-additivity (`1.989 → 1.733`; **`33.7%`** on late loss, `2.078 → 1.715`) and eliminates the `k = 3` LN-miscalibration plunge (`0.123 → 0.465`). Meanwhile, `2L-attn-ln` (Pre-LN without MLP) exhibits almost no backup redundancy (`1.22×` Std / `1.21×` Frozen-LN), proving that **nonlinear MLP saturation drives ~74% of `2L-full`'s backup redundancy**, with LN rescaling contributing the remaining ~26%.
+The ratios above are measured in ICL score and late loss, which are nonlinear in the logits. That distorts them: `2L-attn` has no LayerNorm and no MLP, so its head contributions add exactly in the logits, yet it shows `1.16×` in ICL. Measured on the correct-token logit instead (late positions `192–254`, mean ± SD over 5 seeds, [`artifacts/data/t2_logit_ablation_v2.csv`](artifacts/data/t2_logit_ablation_v2.csv)):
+
+| Arch | Standard | Frozen-LN |
+| :--- | :---: | :---: |
+| **`2L-attn`** | `1.000×` (exactly additive, as expected) | n/a |
+| **`2L-attn-ln`** | **`1.47× ± 0.16`** | `1.00×` |
+| **`2L-full`** | **`1.25× ± 0.05`** | **`0.97× ± 0.01`** |
+
+LayerNorm alone produces super-additive redundancy (`2L-attn-ln`), and freezing its scale removes all of it in both architectures; with LayerNorm frozen, `2L-full`'s MLP adds none. An earlier version of this section split `2L-full`'s ICL-space redundancy into ~26% LayerNorm and ~74% MLP; that split came from the metric, not the model. The `2L-mlp` control (MLP, no LayerNorm) is still to run.
 
 #### Active-Dormant Position-0 Sink & Value-State Drain (Validation Set, `t ≥ 1`)
 
@@ -124,11 +134,13 @@ Freezing post-L1 LayerNorm denominators removes **`25.9%`** of `2L-full`'s exces
 | **`2L-attn-ln`** | **`0.906 ± 0.005`** | `0.614` | `0.474` | `0.388` | `0.223` | **`0.475 ± 0.043`** | `1.025 ± 0.070` |
 | **`2L-full`** | **`0.940 ± 0.002`** | `0.627` | `0.452` | `0.345` | `0.170` | **`0.450 ± 0.013`** | **`0.638 ± 0.041`** |
 
-`2L-attn` has **no** position-0 attention sink (`0.033` at `c_u = 0`) and **no** value-state drain (`1.089`). Adding Pre-LayerNorm alone (`2L-attn-ln`) immediately triggers a **27×** active-dormant sink (`0.906` when the query token is unseen, draining monotonically to `0.223` for `c_u ≥ 4`) and `2.1×` L1 value-norm drain (`0.475`), while the MLP in `2L-full` additionally drains the OV write norm (`0.638`).
+`2L-attn` has **no** position-0 attention sink (`0.033` at `c_u = 0`) and **no** value-state drain (`1.089`). Adding Pre-LayerNorm alone (`2L-attn-ln`) immediately triggers an active-dormant sink (`0.03 → 0.91` when the query token is unseen, falling monotonically to `0.223` for `c_u ≥ 4`) and `2.1×` L1 value-norm drain (`0.475`), while the MLP in `2L-full` additionally drains the OV write norm (`0.638`).
+
+The table above pools all positions, and tokens with `c_u = 0` sit mostly early in the sequence. Splitting by position ([`artifacts/data/t3_sink_pos_x_cu_v2.csv`](artifacts/data/t3_sink_pos_x_cu_v2.csv)), the dependence on `c_u` holds within every position bin (`2L-attn-ln`, positions `192–254`: `0.74` at `c_u = 0` vs. `0.19` at `c_u ≥ 4`), but position has an effect of its own: pooled over `c_u`, sink attention falls from `0.84` (positions `1–31`) to `0.28` (positions `192–254`).
 
 ![LayerNorm self-repair and active-dormant attention sink](artifacts/figures/fig7_self_repair_and_attention_sink.png)
 
-### 4.3 Extension C: `κ = 3.0` Convergence to `25,000` Steps
+### 4.3 Extension C: Extending `κ = 3.0` to `25,000` Steps
 
 Extending all 5 seeds of `2L-attn` (`κ = 3.0, wd = 0.01`) to `25,000` steps ([`artifacts/data/ext_c_kappa3_25k_summary.csv`](artifacts/data/ext_c_kappa3_25k_summary.csv)):
 
@@ -137,9 +149,9 @@ Extending all 5 seeds of `2L-attn` (`κ = 3.0, wd = 0.01`) to `25,000` steps ([`
 | **`10,000`** | `3.094 ± 0.035` | `59.2% ± 3.4%` | `0.526 ± 0.025` | `0.445 ± 0.043` | `0.288 ± 0.013` | `−0.1334` |
 | **`25,000`** | **`2.905 ± 0.010`** | **`77.8% ± 0.9%`** | **`0.670 ± 0.010`** | **`0.959 ± 0.025`** | **`0.341 ± 0.005`** | **`−0.0005 ± 0.0031`** |
 
-By step `25,000`, `κ = 3.0` fully converges (`Δval_loss_late = −0.0005`, `prev_token_L0 = 0.959`), gaining `+18.6` recovery points over step `10,000`, yet asymptotes at **`77.8%`** — systematically below `κ = 1.0` (`86.5%`) and `κ = 0.3` (`95.9%`), revealing a true prior-weighting capacity ceiling in 2-layer attention-only Transformers under strong priors.
+By step `25,000`, `prev_token_L0` saturates (`0.959`) and recovery rises by `+18.6` points, but the loss has not converged: over the last 5k steps it still falls by `0.003 ± 0.002` nats per 1k steps (the `Δ` in the table is a single noisy 1k-step difference). A per-seed exponential fit over steps 15k–25k ([`artifacts/data/t1_kappa3_exp_fit_v2.csv`](artifacts/data/t1_kappa3_exp_fit_v2.csv)) puts the asymptotic gap to Bayes at **`0.20` nats** (bootstrap 95% CI `[0.18, 0.23]`), about `80%` recovery. In absolute terms that gap is smaller than `κ = 1.0`'s gap at 10k (`0.28` nats), so these runs do not show a capacity ceiling specific to strong priors; the lower recovery percentage reflects the smaller bigram-to-Bayes range at `κ = 3.0`.
 
-![Extended 25k-step convergence at kappa=3.0](artifacts/figures/fig8_kappa3_25k_convergence.png)
+![Extended 25k-step run at kappa=3.0](artifacts/figures/fig8_kappa3_25k_convergence.png)
 
 ---
 
@@ -148,9 +160,9 @@ By step `25,000`, `κ = 3.0` fully converges (`Δval_loss_late = −0.0005`, `pr
 This project intentionally reproduces and stress-tests several well-established mechanistic interpretability findings in a single controlled, analytically solvable benchmark. We explicitly distinguish **reproduced/corroborated mechanisms** from our **controlled factorization and diagnostic contributions**:
 
 - **Induction Heads & ICMC Phase Transitions (Reproduced):** Olsson et al. (2022) established the 1L-vs-2L depth barrier, prefix-matching score, and sudden ICL phase transition; Edelman et al. (2024) introduced In-Context Markov Chains (ICMC) with statistical induction heads converging toward Bayes-optimal posterior prediction; Singh et al. (2024) analyzed sub-circuit formation dynamics and the interplay of weight decay, capacity, and transition timing. Our core 35-run sweep and `κ = 3.0` 25k extension corroborate these dynamics quantitatively against exact Dirichlet-Multinomial analytical bounds.
-- **Self-Repair & Backup Redundancy (Corroborated & Factorized):** McGrath et al. (2023, *The Hydra Effect*) demonstrated emergent backup compensation under component ablation, and Rushing & Nanda (2024, ICML) dissected how LayerNorm rescaling vs. downstream MLPs/heads drive self-repair. Our Frozen-LN-scale test across `2L-attn`, `2L-attn-ln`, and `2L-full` quantitatively splits `2L-full`'s `1.99×` super-additive L1 redundancy into ~26% LN rescaling (`1.99× → 1.73×`) and ~74% nonlinear MLP compensation (confirmed by `2L-attn-ln` staying at `1.22×`).
+- **Self-Repair & Backup Redundancy (Corroborated & Factorized):** McGrath et al. (2023, *The Hydra Effect*) demonstrated emergent backup compensation under component ablation, and Rushing & Nanda (2024, ICML) dissected how LayerNorm rescaling vs. downstream MLPs/heads drive self-repair. Our Frozen-LN-scale test across `2L-attn`, `2L-attn-ln` and `2L-full`, measured on the correct-token logit, attributes essentially all of the L1 redundancy in this setting to LayerNorm rescaling (`2L-full`: `1.25× → 0.97×` with LayerNorm frozen).
 - **Active-Dormant Attention Sinks & Value-State Drain (Corroborated & Trigger-Isolated):** Xiao et al. (2023) identified attention sinks at initial tokens; Guo et al. (2024) characterized *active-dormant* heads that park attention on position `0` when no context match exists; Gu et al. (2025, ICLR) documented value-state norm draining at sink tokens. Our 3-way factorization (`2L-attn` vs. `2L-attn-ln` vs. `2L-full`) isolates **Pre-LayerNorm alone** as a sufficient architectural trigger for both the `c_u`-dependent position-0 sink (`0.033 → 0.906` at `c_u = 0`) and L1 value-state drain (`1.089 → 0.475`), while showing that the MLP additionally drains the OV output norm (`1.025 → 0.638`).
-- **Controlled Metric Dissociation Under Weight Decay:** In contrast to finite-data grokking (where stronger `wd` accelerates generalization as `1 / wd`), our paired 5-seed Axis 3 sweep shows a clean dissociation in online ICL: stronger `wd` increases Frobenius K-composition (`5/5` seeds, $p = 0.0067$) while simultaneously delaying `t_icl50` ($p = 0.0087$) and damping `icl_score` and `prev_token_L0` (`5/5` seeds, $p = 0.0067$).
+- **Metric Dissociation Under Weight Decay:** In contrast to finite-data grokking (where stronger `wd` accelerates generalization roughly as `1 / wd`), our paired 5-seed Axis 3 sweep shows a dissociation in online ICL: stronger `wd` increases Frobenius K-composition (`5/5` seeds, $p = 0.0067$) while simultaneously delaying `t_icl50` ($p = 0.0087$) and damping `icl_score` and `prev_token_L0` (`5/5` seeds, $p = 0.0067$). The K-composition score is the maximum over 16 head pairs, and why it rises is not yet explained ([`artifacts/data/t4_kcomp_decomposition_v2.csv`](artifacts/data/t4_kcomp_decomposition_v2.csv)).
 
 ---
 
@@ -167,7 +179,7 @@ This project intentionally reproduces and stress-tests several well-established 
   - [`artifacts/data/sweep_summary.csv`](artifacts/data/sweep_summary.csv) — all 35 core sweep runs
   - [`artifacts/data/ext_b_arch_factorization.csv`](artifacts/data/ext_b_arch_factorization.csv) — 3-way `2L-attn` / `2L-attn-ln` / `2L-full` comparison
   - [`artifacts/data/ext_a_self_repair_sinks.csv`](artifacts/data/ext_a_self_repair_sinks.csv) — Standard vs. Frozen-LN ablations, `c_u`-stratified sinks & value drain
-  - [`artifacts/data/ext_c_kappa3_25k_summary.csv`](artifacts/data/ext_c_kappa3_25k_summary.csv) — `κ = 3.0` 25,000-step convergence
+  - [`artifacts/data/ext_c_kappa3_25k_summary.csv`](artifacts/data/ext_c_kappa3_25k_summary.csv) — `κ = 3.0` 25,000-step extension
 
 ### Running Tests, Training & Analysis
 
@@ -198,4 +210,22 @@ python -m src.dissect \
   --ext-c-root runs/ext_c_kappa3_25k \
   --figures-dir artifacts/figures \
   --data-dir artifacts/data
+
+# 6. Review diagnostics (CPU, ~7 min; needs the runs from steps 3 and 5): logit ablations, kappa gaps,
+#    position-controlled sinks, K-composition norms -> artifacts/data/*_v2.csv
+python -m src.review_diagnostics_v2
 ```
+
+---
+
+## 7. Limitations & Open Questions
+
+1. **One synthetic task.** All results use in-context Markov chains with `V = 64`, `T = 256`, and `5` seeds per cell. Whether the LayerNorm results transfer to natural language is untested.
+2. **Training length.** The core sweep stops at `10,000` steps, before any configuration has converged, and `t_icl50` is defined relative to the gain reached by 10k, so both final losses and transition times are 10k-step quantities.
+3. **The MLP's own role is untested.** Every architecture with an MLP also has LayerNorm. The `2L-mlp` control is needed before attributing any repair, sink or loss effect to the MLP alone.
+4. **The sink depends on position as well as on `c_u`** (Section 4.2); the pooled table overstates how cleanly `c_u` alone predicts it.
+5. **K-composition under weight decay is unexplained.** It rises while the circuit gets weaker, and the norms it is built from grow rather than shrink.
+
+## 8. How This Was Built
+
+The code, the experiments and the first draft of this write-up were produced by an AI coding agent (Gemini, in Antigravity) running on my own machine under a separate account without admin rights; the commits are authored as `ML Repro Agent` for that reason. My part: choosing the paper to reproduce and which extensions to pursue, setting the scope of each stage, reviewing every result with a second model (Claude) acting as a reviewer, and deciding what to claim. Sections 2–4 were corrected and Section 7 added after that review.
